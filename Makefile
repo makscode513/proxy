@@ -1,28 +1,53 @@
-CC = gcc
-CFLAGS = -I./src/include -fPIC
-LDFLAGS = -ldl
+# Компилятор и флаги
+CC      = gcc
+CFLAGS  += -Wall -Wpedantic -Wpointer-arith -Wendif-labels -Wmissing-format-attribute \
+           -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security \
+           -fPIC -rdynamic # Для создания позиционно-независимого кода (необходимо для .so)
+LDFLAGS += -ldl # Подключение библиотеки dlopen
 
-all: create_dirs proxy greeting.so libconfig.a liblogger.so
+# Директории
+BUILD_DIR = install
+PLUGIN_DIR = $(BUILD_DIR)/plugins
+SRC_DIR = src
+INCLUDE_DIR = $(SRC_DIR)/include
 
-create_dirs:
-	mkdir -p install/plugins
+# Исходники
+SRC = $(wildcard $(SRC_DIR)/*.c)
+OBJ = $(SRC:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 
-proxy: src/master.c libconfig.a
-	$(CC) $(CFLAGS) $< -L./install -lconfig -o $@ $(LDFLAGS)
-	mv proxy install/
+# Файлы
+PROXY_BIN = $(BUILD_DIR)/proxy
+STATIC_LIB = $(BUILD_DIR)/libconfig.a
+DYNAMIC_LIB = $(BUILD_DIR)/liblogger.so
+PLUGIN_SO = $(PLUGIN_DIR)/greeting.so
 
-greeting.so: plugins/greeting/greeting.c
-	$(CC) $(CFLAGS) -shared $< -o $@
-	mv greeting.so install/plugins/
+# Создание папок
+$(BUILD_DIR) $(PLUGIN_DIR):
+	mkdir -p $@
 
-libconfig.a: src/config.c
-	$(CC) $(CFLAGS) -c $< -o config.o
-	ar rcs $@ config.o
-	mv $@ install/
+# Сборка исполняемого файла (поддержка dlopen)
+$(PROXY_BIN): $(OBJ) $(DYNAMIC_LIB) $(STATIC_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(OBJ) -o $@ $(LDFLAGS)
 
-liblogger.so: src/logger.c
-	$(CC) $(CFLAGS) -shared $< -o $@
-	mv $@ install/
+# Компиляция объектов
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 
+# Статическая библиотека
+$(STATIC_LIB): $(BUILD_DIR)/config.o
+	ar rcs $@ $^
+
+# Динамическая библиотека (необходима для логирования)
+$(DYNAMIC_LIB): $(BUILD_DIR)/logger.o
+	$(CC) -shared -fPIC $^ -o $@
+
+# Компиляция плагина (используется dlopen, поэтому создаём .so)
+$(PLUGIN_SO): plugins/greeting/greeting.c | $(PLUGIN_DIR)
+	$(CC) -shared -fPIC $< -o $@
+
+# Очистка
 clean:
-	rm -rf install/*.so install/*.a install/proxy install/plugins/*.so
+	rm -rf $(BUILD_DIR)
+
+# Сборка всего проекта
+all: $(PROXY_BIN) $(PLUGIN_SO)

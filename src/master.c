@@ -1,34 +1,56 @@
 #include <stdio.h>
 #include <dlfcn.h>
+#include <stdlib.h>
+#include <string.h>
 #include "master.h"
 
-typedef void (*hook_func)();
+// Определение переменной executor_start_hook
+Hook executor_start_hook = NULL;
 
 int main() {
+    // 1. Загрузка плагина
     void *handle = dlopen("install/plugins/greeting.so", RTLD_LAZY);
     if (!handle) {
-        printf("Ошибка загрузки плагина: %s\n", dlerror());
-        return 1;
+        fprintf(stderr, "Ошибка загрузки плагина: %s\n", dlerror());
+        return EXIT_FAILURE;
     }
 
-    hook_func init = (hook_func) dlsym(handle, "init");
-    hook_func fini = (hook_func) dlsym(handle, "fini");
-    hook_func hook = (hook_func) dlsym(handle, "executor_start_hook");
+    // 2. Получение обязательных функций плагина
+    void (*init)(void) = dlsym(handle, "init");
+    void (*fini)(void) = dlsym(handle, "fini");
+    executor_start_hook = dlsym(handle, "executor_start_hook");
+    const char* (*name)(void) = dlsym(handle, "name");
 
-    if (!init || !fini || !hook) {
-        printf("Ошибка поиска функций в плагине: %s\n", dlerror());
+    // 3. Проверка наличия функций
+    if (!init || !fini || !name || !executor_start_hook) {
+        fprintf(stderr, "Плагин не соответствует интерфейсу\n");
         dlclose(handle);
-        return 1;
+        return EXIT_FAILURE;
     }
 
+    // 4. Проверка имени плагина
+    if (strcmp(name(), "greeting") != 0) {
+        fprintf(stderr, "Неверное имя плагина\n");
+        dlclose(handle);
+        return EXIT_FAILURE;
+    }
+
+    // 5. Инициализация плагина
     init();
 
+    // 6. Вызов хука, если он установлен
     if (executor_start_hook) {
         executor_start_hook();
     }
 
+    // 7. Финализация и выгрузка
     fini();
+    executor_start_hook = NULL;  // Сброс хука после выгрузки
 
-    dlclose(handle);
-    return 0;
+    if (dlclose(handle) != 0) {
+        fprintf(stderr, "Ошибка выгрузки плагина: %s\n", dlerror());
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
